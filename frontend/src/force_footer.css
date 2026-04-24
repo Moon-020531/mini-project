@@ -1,0 +1,40 @@
+.app-container {
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 100vh !important;
+}
+.main-content {
+  flex: 1 !important;
+}
+.app-footer {
+  margin-top: auto !important;
+  padding: 32px 40px !important;
+  background: transparent !important;
+  display: flex !important;
+  justify-content: center !important;
+  width: 100% !important;
+}
+.footer-content {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+.footer-copyright {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: var(--text-secondary) !important;
+  opacity: 0.8 !important;
+}
+.footer-message {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  font-size: 13px !important;
+  color: var(--text-muted) !important;
+}
+.heart-icon {
+  color: var(--accent-red) !important;
+  fill: var(--accent-red) !important;
+  animation: heartbeat 2s infinite ease-in-out !important;
+}
