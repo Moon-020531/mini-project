@@ -1,0 +1,67 @@
+# =========================
+# 1. OS & IDE (운영체제 및 에디터)
+# =========================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# =========================
+# 2. Python (AI 비전 / MediaPipe)
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# =========================
+# 3. Java & Spring Boot (백엔드)
+# =========================
+.gradle/
+build/
+target/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+.apt_generated/
+.classpath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+
+# ★중요: DB 비밀번호가 들어간 설정 파일 제외 (필요시 이름 수정)
+application-secret.yml
+application-secret.properties
+
+# =========================
+# 4. React & Node.js (프론트엔드)
+# =========================
+node_modules/
+dist/
+build/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# =========================
+# 5. Arduino / ESP32 (IoT 하드웨어)
+# =========================
+# (보통 아두이노 스케치 폴더 밖에서 빌드되지만, 혹시 모를 임시 파일들)
+build/
+*.elf
+*.bin
+*.hex
+*.part
