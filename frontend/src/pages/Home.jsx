@@ -2,6 +2,9 @@ import { Link } from 'react-router-dom';
 import { ShieldCheck, Activity, Zap } from 'lucide-react';
 
 export default function Home() {
+  const isLoggedIn = !!localStorage.getItem('token');
+  const targetPath = isLoggedIn ? '/dashboard' : '/login';
+
   return (
     <div className="home-container">
       <header className="hero-section">
@@ -16,8 +19,8 @@ export default function Home() {
             당신이 깨닫기 전에 건강한 자세로 되돌려줍니다.
           </p>
           <div className="hero-actions">
-            <Link to="/login" className="btn-primary btn-large">무료로 시작하기</Link>
-            <Link to="/login" className="btn-secondary btn-large">데모 보기</Link>
+            <Link to={targetPath} className="btn-primary btn-large">무료로 시작하기</Link>
+            <Link to={targetPath} className="btn-secondary btn-large">데모 보기</Link>
           </div>
         </div>
         <div className="hero-visual">

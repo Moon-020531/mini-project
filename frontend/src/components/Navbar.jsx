@@ -5,10 +5,12 @@ export default function Navbar() {
   const navigate = useNavigate();
   const token = localStorage.getItem('token');
   const username = localStorage.getItem('username');
+  const profileImage = localStorage.getItem('profileImage');
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('username');
+    localStorage.removeItem('profileImage');
     navigate('/');
   };
 
@@ -32,7 +34,16 @@ export default function Navbar() {
               <span>나의 기록</span>
             </Link>
             <div className="nav-user">
-              <User size={18} />
+              {profileImage ? (
+                <img 
+                  src={profileImage} 
+                  alt="프로필" 
+                  className="nav-profile-img"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <User size={18} />
+              )}
               <span>{username}님</span>
             </div>
             <button onClick={handleLogout} className="btn-logout">

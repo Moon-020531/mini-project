@@ -214,6 +214,26 @@ body {
 .auth-submit { width: 100%; padding: 14px; font-size: 1.1rem; margin-top: 12px; }
 .auth-toggle { margin-top: 24px; text-align: center; color: var(--text-secondary); font-size: 0.95rem; }
 
+/* Google 로그인 관련 스타일 */
+.google-login-section { margin-bottom: 8px; }
+.google-btn-wrapper { 
+  display: flex; justify-content: center; margin-bottom: 24px;
+}
+.google-btn-wrapper > div { width: 100% !important; }
+.google-btn-wrapper iframe { width: 100% !important; }
+
+.auth-divider {
+  display: flex; align-items: center; gap: 16px; margin-bottom: 20px;
+}
+.divider-line { flex: 1; height: 1px; background: #e2e8f0; }
+.divider-text { font-size: 0.85rem; color: var(--text-muted); font-weight: 600; white-space: nowrap; }
+
+/* Navbar 프로필 이미지 */
+.nav-profile-img {
+  width: 28px; height: 28px; border-radius: 50%;
+  object-fit: cover; border: 2px solid var(--accent-green);
+}
+
 
 .dashboard { max-width: 1200px; margin: 0 auto; padding: 40px 24px; }
 .dashboard-header { margin-bottom: 40px; }

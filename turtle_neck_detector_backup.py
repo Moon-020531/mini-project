@@ -6,7 +6,7 @@ import requests
 import threading
 
 # 통신을 위한 엔드포인트 URL 설정 (실제 환경에 맞게 IP 및 포트 수정 필요)
-ESP32_URL = "http://192.168.0.46" # 예: ESP32 로컬 IP (끝에 슬래시 제외)
+ESP32_URL = "http://192.168.0.21" # 예: ESP32 로컬 IP (끝에 슬래시 제외)
 BACKEND_URL = "http://localhost:8080/api/log" # 예: Spring Boot 로깅 API
 
 def send_esp32_request(is_warning):

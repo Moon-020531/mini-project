@@ -5,6 +5,11 @@
 const char* ssid = "5층";
 const char* password = "48864886";
 
+// 2. 고정 IP 설정 (DHCP 대신 항상 이 IP를 사용)
+IPAddress staticIP(192, 168, 0, 21);
+IPAddress gateway(192, 168, 0, 1);
+IPAddress subnet(255, 255, 255, 0);
+
 // 2. 핀 및 하드웨어 설정 (네오픽셀 대신 일반 LED 2개 사용)
 #define GREEN_LED_PIN 13  // 초록색 LED (+) 연결 핀
 #define RED_LED_PIN   14  // 빨간색 LED (+) 연결 핀
@@ -66,18 +71,41 @@ void setup() {
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
 
+  // ★ 고정 IP 적용 (DHCP 대신 항상 192.168.0.21 사용)
+  WiFi.config(staticIP, gateway, subnet);
+
   Serial.println();
   Serial.print("Wi-Fi 연결 중: ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
   
-  while (WiFi.status() != WL_CONNECTED) {
+  // WiFi 연결 대기 (최대 15초) - 연결 중에는 빨간 LED 깜빡임
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    digitalWrite(RED_LED_PIN, !digitalRead(RED_LED_PIN)); // 빨간 LED 깜빡임
     delay(500);
     Serial.print(".");
+    attempts++;
   }
+  digitalWrite(RED_LED_PIN, LOW); // 깜빡임 중지
   
-  Serial.println("");
-  Serial.println("Wi-Fi 연결 성공!");
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.println("Wi-Fi 연결 성공!");
+    
+    // ★ 시리얼 모니터 없이도 확인 가능: 초록 LED 3번 깜빡임 = WiFi 연결 성공!
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(GREEN_LED_PIN, HIGH);
+      delay(200);
+      digitalWrite(GREEN_LED_PIN, LOW);
+      delay(200);
+    }
+    digitalWrite(GREEN_LED_PIN, HIGH); // 마지막에 초록 LED 켜짐 유지 = 준비 완료
+  } else {
+    Serial.println("\nWi-Fi 연결 실패!");
+    // ★ 빨간 LED 계속 켜짐 = WiFi 연결 실패
+    digitalWrite(RED_LED_PIN, HIGH);
+  }
   
   // ★중요: 할당받은 IP 주소 출력 (이 주소가 리액트 코드의 ESP32_URL과 일치해야 함)
   Serial.print("ESP32 IP 주소: ");

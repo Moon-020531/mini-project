@@ -4,7 +4,7 @@ import axios from 'axios';
 
 /* global Pose, Camera */
 
-const ESP32_URL = 'http://192.168.0.46';
+const ESP32_URL = 'http://192.168.0.21';
 const BACKEND_URL = 'http://localhost:8080/api/log';
 
 const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, onPresenceChange }, ref) => {
