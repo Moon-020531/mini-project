@@ -122,4 +122,112 @@ public class AuthController {
                     .body("Google 로그인 처리 중 오류: " + e.getMessage());
         }
     }
+
+    // ========== Naver OAuth 로그인 (신규) ==========
+
+    @Value("${naver.client.id}")
+    private String naverClientId;
+
+    @Value("${naver.client.secret}")
+    private String naverClientSecret;
+
+    @PostMapping("/naver")
+    public ResponseEntity<?> naverLogin(@RequestBody com.posturedesk.dto.NaverLoginRequest request) {
+        try {
+            org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
+
+            // 1. 네이버 토큰 발급 요청 (안전한 URI 빌드)
+            String tokenUrl = org.springframework.web.util.UriComponentsBuilder.fromHttpUrl("https://nid.naver.com/oauth2.0/token")
+                    .queryParam("grant_type", "authorization_code")
+                    .queryParam("client_id", naverClientId)
+                    .queryParam("client_secret", naverClientSecret)
+                    .queryParam("code", request.getCode())
+                    .queryParam("state", request.getState())
+                    .toUriString();
+
+            ResponseEntity<Map> tokenResponse;
+            try {
+                tokenResponse = restTemplate.getForEntity(tokenUrl, Map.class);
+            } catch (Exception e) {
+                System.err.println("네이버 토큰 발급 에러: " + e.getMessage());
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("네이버 토큰 발급 실패: " + e.getMessage());
+            }
+
+            if (!tokenResponse.getStatusCode().is2xxSuccessful() || tokenResponse.getBody() == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("네이버 토큰 발급 응답 오류");
+            }
+            
+            String accessToken = (String) tokenResponse.getBody().get("access_token");
+            if (accessToken == null) {
+                System.err.println("네이버 토큰 응답: " + tokenResponse.getBody());
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("네이버 액세스 토큰이 없습니다.");
+            }
+
+            // 2. 네이버 유저 프로필 조회
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            org.springframework.http.HttpEntity<String> entity = new org.springframework.http.HttpEntity<>("", headers);
+
+            ResponseEntity<Map> profileResponse;
+            try {
+                profileResponse = restTemplate.exchange(
+                        "https://openapi.naver.com/v1/nid/me",
+                        org.springframework.http.HttpMethod.GET,
+                        entity,
+                        Map.class
+                );
+            } catch (Exception e) {
+                System.err.println("네이버 프로필 조회 에러 (토큰: " + accessToken + "): " + e.getMessage());
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("네이버 프로필 조회 실패: " + e.getMessage());
+            }
+
+            if (!profileResponse.getStatusCode().is2xxSuccessful() || profileResponse.getBody() == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("네이버 프로필 조회 실패");
+            }
+
+            Map<String, Object> responseBody = (Map<String, Object>) profileResponse.getBody().get("response");
+            String email = (String) responseBody.get("email");
+            String picture = (String) responseBody.get("profile_image");
+            
+            if (email == null) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("이메일 정보 제공 동의가 필요합니다.");
+            }
+
+            // 3. DB에서 이메일로 기존 유저 조회, 없으면 자동 생성
+            User user = userRepository.findByEmail(email).orElseGet(() -> {
+                User newUser = new User();
+                newUser.setEmail(email);
+                
+                String baseUsername = email.split("@")[0] + "_n"; // 네이버 유저 구분용 접미사
+                String username = baseUsername;
+                int suffix = 1;
+                while (userRepository.findByUsername(username).isPresent()) {
+                    username = baseUsername + suffix++;
+                }
+                newUser.setUsername(username);
+                newUser.setProvider("NAVER");
+                newUser.setProfileImage(picture);
+                return userRepository.save(newUser);
+            });
+
+            // 기존 유저라면 프로필 이미지 업데이트
+            if (user.getProfileImage() == null || !user.getProfileImage().equals(picture)) {
+                user.setProfileImage(picture);
+                userRepository.save(user);
+            }
+
+            // 4. 서비스 토큰 발급
+            String serviceToken = UUID.randomUUID().toString();
+            Map<String, Object> finalResponse = new HashMap<>();
+            finalResponse.put("token", serviceToken);
+            finalResponse.put("username", user.getUsername());
+            finalResponse.put("profileImage", user.getProfileImage());
+
+            return ResponseEntity.ok(finalResponse);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("네이버 로그인 처리 중 오류: " + e.getMessage());
+        }
+    }
 }

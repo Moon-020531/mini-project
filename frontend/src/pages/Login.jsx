@@ -61,6 +61,57 @@ export default function Login() {
     }
   }, []);
 
+  // Naver 로그인 핸들러 (리디렉션 방식)
+  const handleNaverLogin = () => {
+    const clientId = import.meta.env.VITE_NAVER_CLIENT_ID;
+    const redirectURI = encodeURIComponent('http://localhost:5173/login');
+    const state = Math.random().toString(36).substring(3, 14);
+    
+    // CSRF 방지를 위해 state를 sessionStorage에 임시 저장 (옵션이지만 권장)
+    sessionStorage.setItem('naver_state', state);
+
+    const naverAuthUrl = `https://nid.naver.com/oauth2.0/authorize?response_type=code&client_id=${clientId}&redirect_uri=${redirectURI}&state=${state}`;
+    window.location.href = naverAuthUrl;
+  };
+
+  // Naver 콜백 처리 (URL 파라미터 확인)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
+
+    if (code && state) {
+      const processNaverLogin = async () => {
+        setLoading(true);
+        try {
+          const res = await axios.post('http://localhost:8080/api/auth/naver', {
+            code,
+            state
+          });
+
+          localStorage.setItem('token', res.data.token);
+          localStorage.setItem('username', res.data.username);
+          if (res.data.profileImage) {
+            localStorage.setItem('profileImage', res.data.profileImage);
+          }
+          navigate('/dashboard');
+        } catch (err) {
+          if (err.response) {
+            setError(err.response.data);
+          } else {
+            setError('네이버 로그인 처리 중 오류가 발생했습니다.');
+          }
+        } finally {
+          setLoading(false);
+          // URL 파라미터 정리
+          window.history.replaceState({}, document.title, '/login');
+        }
+      };
+      
+      processNaverLogin();
+    }
+  }, [navigate]);
+
   // 기존 로그인/회원가입 핸들러
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -107,10 +158,19 @@ export default function Login() {
 
         {error && <div className="alert-error">{error}</div>}
 
-        {/* Google 로그인 버튼 */}
+        {/* Google & Naver 로그인 버튼 */}
         {isLogin && (
-          <div className="google-login-section">
+          <div className="social-login-section">
             <div ref={googleBtnRef} className="google-btn-wrapper"></div>
+            
+            <button 
+              type="button" 
+              onClick={handleNaverLogin} 
+              className="btn-naver-login"
+            >
+              <span className="naver-icon">N</span>
+              <span className="naver-text">네이버 로그인</span>
+            </button>
             
             <div className="auth-divider">
               <span className="divider-line"></span>
