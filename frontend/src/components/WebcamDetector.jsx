@@ -2,28 +2,84 @@ import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperat
 import Webcam from 'react-webcam';
 import axios from 'axios';
 
-/* global Pose, Camera */
+/* global Pose, FaceMesh, Camera */
 
-const ESP32_URL = 'http://192.168.0.21';
+const ESP32_URL = 'http://localhost:5000';
 const BACKEND_URL = 'http://localhost:8080/api/log';
 
-const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, onPresenceChange }, ref) => {
+// ==================== EAR 관련 상수 ====================
+// Face Mesh 468+10 기준 눈 랜드마크 인덱스
+const LEFT_EYE_IDX = [362, 385, 387, 263, 373, 380];
+const RIGHT_EYE_IDX = [33, 160, 158, 133, 153, 144];
+const EAR_THRESHOLD = 0.20;
+const NORMAL_BLINK_RATE = 15;
+
+// 얼굴 너비 기반 거리 추정 상수
+const LEFT_TEMPLE_IDX = 234;
+const RIGHT_TEMPLE_IDX = 454;
+const KNOWN_FACE_WIDTH_CM = 14.0;
+const FOCAL_LENGTH_PX = 600.0;
+const SAFE_DISTANCE_CM = 40.0;
+
+// 어깨 비대칭 임계값
+const SHOULDER_TILT_THRESHOLD = 10.0;
+
+// ==================== 유틸 함수 ====================
+function dist(p1, p2) {
+  return Math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2);
+}
+
+function calculateEAR(landmarks, eyeIndices, w, h) {
+  const pts = eyeIndices.map(idx => [landmarks[idx].x * w, landmarks[idx].y * h]);
+  const v1 = dist(pts[1], pts[5]);
+  const v2 = dist(pts[2], pts[4]);
+  const hz = dist(pts[0], pts[3]);
+  if (hz === 0) return 0;
+  return (v1 + v2) / (2.0 * hz);
+}
+
+function estimateDistance(landmarks, w, h) {
+  const lt = landmarks[LEFT_TEMPLE_IDX];
+  const rt = landmarks[RIGHT_TEMPLE_IDX];
+  const faceW = dist([lt.x * w, lt.y * h], [rt.x * w, rt.y * h]);
+  if (faceW < 1) return -1;
+  return (KNOWN_FACE_WIDTH_CM * FOCAL_LENGTH_PX) / faceW;
+}
+
+function calculateShoulderTilt(sL, sR, w, h) {
+  const ly = sL.y * h, ry = sR.y * h;
+  const lx = sL.x * w, rx = sR.x * w;
+  const dy = Math.abs(ly - ry);
+  const dx = Math.abs(lx - rx);
+  if (dx === 0) return 90;
+  return Math.atan2(dy, dx) * (180 / Math.PI);
+}
+
+function clamp(v, lo = 0, hi = 100) { return Math.max(lo, Math.min(hi, v)); }
+
+function calculatePostureScore(cvaAngle, shoulderTilt, distanceCm) {
+  const sCva = clamp((cvaAngle - 30) / (70 - 30) * 100);
+  const sShoulder = clamp((1 - shoulderTilt / 20) * 100);
+  const sDistance = distanceCm > 0 ? clamp((distanceCm - 20) / (50 - 20) * 100) : 50;
+  const score = 0.50 * sCva + 0.25 * sShoulder + 0.25 * sDistance;
+  return { total: Math.round(score * 10) / 10, sCva: Math.round(sCva), sShoulder: Math.round(sShoulder), sDistance: Math.round(sDistance) };
+}
+
+// ==================== 컴포넌트 ====================
+const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, onPresenceChange, onPostureData }, ref) => {
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const cameraRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
-    stopMeasurement: () => {
-      setIsMeasuring(false);
-    }
+    stopMeasurement: () => { setIsMeasuring(false); }
   }));
 
-  // UI States
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [calibMode, setCalibMode] = useState('NONE');
   const [calibProgress, setCalibProgress] = useState(0);
 
-  // 모든 측정 로직은 Ref 기반으로 관리 (React 렌더링과 분리)
+  // Refs
   const calibModeRef = useRef('NONE');
   const isCurrentlyWarningRef = useRef(false);
   const warningCountRef = useRef(0);
@@ -38,7 +94,17 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
   const smoothPenaltyRef = useRef(0);
   const isPresentRef = useRef(true);
 
-  // calibMode state와 ref를 동기화
+  // Face Mesh refs
+  const faceMeshRef = useRef(null);
+  const blinkTimestampsRef = useRef([]);
+  const latestFaceDataRef = useRef({ ear: 0.25, blinksPerMin: 0, distanceCm: -1, blinkTotal: 0 });
+  const frameCountRef = useRef(0);
+  const faceMeshBusyRef = useRef(false);
+  // 시간 기반 깜빡임 상태머신
+  const eyeClosedRef = useRef(false);      // 현재 눈 감김 상태
+  const eyeCloseTimeRef = useRef(0);       // 눈 감김 시작 시각(ms)
+  const blinkTotalRef = useRef(0);         // 누적 깜빡임 횟수
+
   useEffect(() => { calibModeRef.current = calibMode; }, [calibMode]);
 
   const sendESP32Command = useCallback((isWarning) => {
@@ -46,14 +112,13 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
     fetch(`${ESP32_URL}${endpoint}`, { method: 'GET', mode: 'no-cors' }).catch(() => {});
   }, []);
 
-  const sendBackendLog = useCallback((goodTime, warnCount) => {
-    console.log(`[로그 전송] goodTime=${goodTime}, warnCount=${warnCount}, user=${username}`);
+  const sendBackendLog = useCallback((goodTime, warnCount, score) => {
     axios.post(BACKEND_URL, {
       goodPostureTime: goodTime,
       warningCount: warnCount,
+      postureScore: score,
       username: username
     }).then(() => {
-      console.log('[로그 전송 성공]');
       if (onDataSaved) onDataSaved();
     }).catch((err) => {
       console.error('[로그 전송 실패]', err.message);
@@ -88,7 +153,6 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
     setCalibProgress(0);
   };
 
-  // isMeasuring 상태와 캘리브레이션 'DONE' 상태가 모두 만족될 때 대시보드 타이머를 작동시킴
   useEffect(() => {
     if (onMeasuringChange) {
       const isSessionReallyStarted = isMeasuring && calibMode === 'DONE';
@@ -96,6 +160,62 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
     }
   }, [isMeasuring, calibMode, onMeasuringChange]);
 
+  // Face Mesh 결과 핸들러 (시간 기반 상태머신 깜빡임 감지)
+  const onFaceResults = useCallback((results) => {
+    if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+      console.log('[FaceMesh] 얼굴 미감지');
+      return;
+    }
+    
+    const video = webcamRef.current?.video;
+    if (!video) return;
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    const flm = results.multiFaceLandmarks[0];
+
+    // EAR 계산 (양쪽 눈 평균)
+    const leftEar = calculateEAR(flm, LEFT_EYE_IDX, w, h);
+    const rightEar = calculateEAR(flm, RIGHT_EYE_IDX, w, h);
+    const avgEar = (leftEar + rightEar) / 2.0;
+
+    const now = Date.now();
+
+    // ========== 시간 기반 상태머신 깜빡임 판정 ==========
+    // 원리: OPEN -> CLOSED(시각 기록) -> OPEN(지속 50~500ms이면 1회 깜빡임)
+    // 프레임 스킵과 무관하게 시간만으로 판정하므로 정확도가 높음
+    if (avgEar < EAR_THRESHOLD) {
+      // 눈이 감겨있는 상태
+      if (!eyeClosedRef.current) {
+        // OPEN -> CLOSED 전환: 감김 시작 시각 기록
+        eyeClosedRef.current = true;
+        eyeCloseTimeRef.current = now;
+      }
+    } else {
+      // 눈이 떠있는 상태
+      if (eyeClosedRef.current) {
+        // CLOSED -> OPEN 전환: 깜빡임 판정
+        const closeDuration = now - eyeCloseTimeRef.current;
+        // 유효한 깜빡임: 50ms(너무 짧은 노이즈 제외) ~ 500ms(의도적 감기 제외)
+        if (closeDuration >= 50 && closeDuration <= 500) {
+          blinkTimestampsRef.current.push(now);
+          blinkTotalRef.current += 1;
+          console.log(`[Blink #${blinkTotalRef.current}] EAR=${avgEar.toFixed(3)}, duration=${closeDuration}ms`);
+        }
+        eyeClosedRef.current = false;
+      }
+    }
+
+    // 60초 윈도우 밖 타임스탬프 제거
+    blinkTimestampsRef.current = blinkTimestampsRef.current.filter(t => now - t <= 60000);
+    const blinksPerMin = blinkTimestampsRef.current.length;
+
+    // 거리 추정
+    const distanceCm = estimateDistance(flm, w, h);
+
+    latestFaceDataRef.current = { ear: avgEar, blinksPerMin, distanceCm, blinkTotal: blinkTotalRef.current };
+  }, []);
+
+  // Pose 결과 핸들러
   const onResults = useCallback((results) => {
     if (!canvasRef.current || !webcamRef.current || !webcamRef.current.video) return;
 
@@ -115,6 +235,11 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
     let penalty = 0;
     const mode = calibModeRef.current;
 
+    // Face Mesh에서 가져온 최신 데이터
+    const faceData = latestFaceDataRef.current;
+    let shoulderTilt = 0;
+    let cvaAngle = 70;
+
     if (results.poseLandmarks) {
       if (!isPresentRef.current) {
         isPresentRef.current = true;
@@ -123,6 +248,17 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
       const nose = results.poseLandmarks[0];
       const sL = results.poseLandmarks[11];
       const sR = results.poseLandmarks[12];
+
+      // 어깨 비대칭 계산
+      shoulderTilt = calculateShoulderTilt(sL, sR, videoWidth, videoHeight);
+
+      // CVA 각도 추정 (귀-어깨 기반)
+      const earR = results.poseLandmarks[8];
+      const earX = earR.x * videoWidth, earY = earR.y * videoHeight;
+      const shoX = sR.x * videoWidth, shoY = sR.y * videoHeight;
+      const dx = Math.abs(shoX - earX);
+      const dy = shoY - earY;
+      cvaAngle = dx === 0 ? 90 : Math.atan2(dy, dx) * (180 / Math.PI);
 
       // 뼈대 렌더링
       canvasCtx.beginPath();
@@ -154,7 +290,6 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
             dropY: sum.dropY / 90,
             ratio: sum.ratio / 90,
           };
-          console.log('[캘리브레이션 완료] 기준점:', baselineRef.current);
 
           goodPostureStartRef.current = Date.now();
           lastLogTimeRef.current = Date.now();
@@ -200,6 +335,28 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
           statusText = '거북목 감지';
         }
 
+        // 복합 자세 점수 계산
+        const postureScore = calculatePostureScore(cvaAngle, shoulderTilt, faceData.distanceCm);
+        
+        // 부모 컴포넌트에 실시간 데이터 전달
+        if (onPostureData) {
+          onPostureData({
+            postureScore: postureScore.total,
+            scoreCva: postureScore.sCva,
+            scoreShoulder: postureScore.sShoulder,
+            scoreDistance: postureScore.sDistance,
+            cvaAngle: Math.round(cvaAngle),
+            shoulderTilt: Math.round(shoulderTilt * 10) / 10,
+            distanceCm: Math.round(faceData.distanceCm * 10) / 10,
+            ear: Math.round(faceData.ear * 100) / 100,
+            blinksPerMin: faceData.blinksPerMin,
+            isFatigued: faceData.blinksPerMin < NORMAL_BLINK_RATE,
+            isShoulderAsymmetry: shoulderTilt > SHOULDER_TILT_THRESHOLD,
+            isTooClose: faceData.distanceCm > 0 && faceData.distanceCm < SAFE_DISTANCE_CM,
+            penalty: Math.round(penalty),
+          });
+        }
+
         // 디바운싱
         if (penalty >= 70) {
           if (!isCurrentlyWarningRef.current) {
@@ -221,7 +378,7 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
           }
         }
 
-        // ★ 10초마다 백엔드 로그 전송 (핵심!)
+        // 10초마다 백엔드 로그 전송
         const now = Date.now();
         if (now - lastLogTimeRef.current >= 10000) {
           if (!isCurrentlyWarningRef.current) {
@@ -230,58 +387,114 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
           }
           const g = Math.floor(totalGoodTimeRef.current);
           const w = warningCountRef.current;
-          console.log(`[10초 타이머 도달] goodTime=${g}, warns=${w}`);
-          sendBackendLog(g, w);
+          sendBackendLog(g, w, postureScore.total);
           totalGoodTimeRef.current = 0;
           warningCountRef.current = 0;
           lastLogTimeRef.current = now;
         }
       }
     } else {
-      // 랜드마크가 검출되지 않음 (사용자가 화면 밖으로 이탈, 자리 비움)
       if (isPresentRef.current) {
         isPresentRef.current = false;
         if (onPresenceChange) onPresenceChange(false);
       }
       color = '#64748b';
-      statusText = '자리 비움 🈳 (타이머 일시 정지)';
+      statusText = '자리 비움 (타이머 일시 정지)';
       
       if (calibModeRef.current === 'DONE') {
-        // 자리 비움 시 경고 중이었다면 해제
         if (isCurrentlyWarningRef.current) {
           isCurrentlyWarningRef.current = false;
           sendESP32Command(false);
         }
-        // 자리를 비운 동안 시간이 누적되지 않도록 시작점을 계속 현재 시간으로 당겨줌
         goodPostureStartRef.current = Date.now();
       }
     }
 
-    // --- 좌우반전 텍스트 렌더링 ---
+    // --- HUD 렌더링 ---
     canvasCtx.save();
     canvasCtx.scale(-1, 1);
 
-    canvasCtx.font = 'bold 24px Inter';
+    canvasCtx.font = 'bold 22px Inter';
     canvasCtx.fillStyle = color;
     canvasCtx.shadowColor = 'rgba(0,0,0,0.8)';
     canvasCtx.shadowBlur = 4;
 
-    canvasCtx.fillText(statusText, -videoWidth + 20, 50);
+    let yOff = 40;
+    canvasCtx.fillText(statusText, -videoWidth + 20, yOff);
+    yOff += 32;
 
     if (mode === 'DONE') {
-      canvasCtx.fillText(`오차 점수: ${penalty.toFixed(0)} 점`, -videoWidth + 20, 90);
+      // 복합 점수
+      const ps = calculatePostureScore(cvaAngle, shoulderTilt, faceData.distanceCm);
+      const scoreColor = ps.total >= 80 ? '#10b981' : ps.total >= 60 ? '#fbbf24' : '#ef4444';
+      canvasCtx.fillStyle = scoreColor;
+      canvasCtx.font = 'bold 26px Inter';
+      canvasCtx.fillText(`자세 점수: ${ps.total}/100`, -videoWidth + 20, yOff);
+      yOff += 30;
+
+      canvasCtx.font = 'bold 18px Inter';
+
+      // CVA
+      canvasCtx.fillStyle = cvaAngle < 50 ? '#ef4444' : '#10b981';
+      canvasCtx.fillText(`거북목 각도(CVA): ${Math.round(cvaAngle)}도`, -videoWidth + 20, yOff);
+      yOff += 24;
+
+      // 어깨 비대칭
+      canvasCtx.fillStyle = shoulderTilt > SHOULDER_TILT_THRESHOLD ? '#ef4444' : '#10b981';
+      canvasCtx.fillText(`어깨 기울기: ${shoulderTilt.toFixed(1)}도`, -videoWidth + 20, yOff);
+      yOff += 24;
+
+      // 거리
+      if (faceData.distanceCm > 0) {
+        canvasCtx.fillStyle = faceData.distanceCm < SAFE_DISTANCE_CM ? '#ef4444' : '#10b981';
+        canvasCtx.fillText(`모니터 거리: ${faceData.distanceCm.toFixed(0)}cm`, -videoWidth + 20, yOff);
+        yOff += 24;
+      }
+
+      // EAR & 깜빡임 (눈 상태 시각화)
+      const eyeState = eyeClosedRef.current ? '● 감김' : '○ 뜸';
+      const eyeStateColor = eyeClosedRef.current ? '#ef4444' : '#60a5fa';
+      canvasCtx.fillStyle = eyeStateColor;
+      canvasCtx.fillText(`${eyeState}  EAR: ${faceData.ear.toFixed(3)}`, -videoWidth + 20, yOff);
+      yOff += 24;
+      canvasCtx.fillStyle = '#60a5fa';
+      canvasCtx.fillText(`깜빡임: 총 ${faceData.blinkTotal || 0}회 / 분당 ${faceData.blinksPerMin}회`, -videoWidth + 20, yOff);
+      yOff += 24;
+
+      // 경고 메시지들
+      if (isCurrentlyWarningRef.current) {
+        canvasCtx.fillStyle = '#ef4444';
+        canvasCtx.font = 'bold 20px Inter';
+        canvasCtx.fillText('!! 거북목 경고 !!', -videoWidth + 20, yOff);
+        yOff += 26;
+      }
+      if (shoulderTilt > SHOULDER_TILT_THRESHOLD) {
+        canvasCtx.fillStyle = '#f97316';
+        canvasCtx.fillText('!! 어깨 비대칭 감지 !!', -videoWidth + 20, yOff);
+        yOff += 26;
+      }
+      if (faceData.distanceCm > 0 && faceData.distanceCm < SAFE_DISTANCE_CM) {
+        canvasCtx.fillStyle = '#f97316';
+        canvasCtx.fillText('!! 모니터 너무 가까움 !!', -videoWidth + 20, yOff);
+        yOff += 26;
+      }
+      if (faceData.blinksPerMin < NORMAL_BLINK_RATE) {
+        canvasCtx.fillStyle = '#a78bfa';
+        canvasCtx.fillText('!! 눈 피로 주의 !!', -videoWidth + 20, yOff);
+      }
     }
 
-    if (isCurrentlyWarningRef.current) {
-      canvasCtx.fillStyle = '#ef4444';
-      canvasCtx.fillText('⚠️ 거북목 경고 발동!', -videoWidth + 20, 130);
-    }
     canvasCtx.restore();
     canvasCtx.restore();
-  }, [sendESP32Command, sendBackendLog]);
+  }, [sendESP32Command, sendBackendLog, onPresenceChange, onPostureData]);
 
+  // 카메라 & 모델 초기화
   useEffect(() => {
+    let faceMeshInterval = null;
+    let faceMeshTimer = null;
+
     if (isMeasuring && webcamRef.current && webcamRef.current.video) {
+      // ===== Pose 모델 (즉시 시작) =====
       const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
       pose.setOptions({
         modelComplexity: 0,
@@ -292,22 +505,82 @@ const WebcamDetector = forwardRef(({ username, onDataSaved, onMeasuringChange, o
       pose.onResults(onResults);
 
       const camera = new Camera(webcamRef.current.video, {
-        onFrame: async () => { await pose.send({ image: webcamRef.current.video }); },
+        onFrame: async () => {
+          await pose.send({ image: webcamRef.current.video });
+        },
         width: 640,
         height: 480,
       });
       camera.start();
       cameraRef.current = camera;
+      console.log('[Pose] 카메라 & Pose 모델 시작됨');
+
+      // ===== Face Mesh (2초 후 지연 시작 — Pose WASM과 충돌 방지) =====
+      faceMeshTimer = setTimeout(() => {
+        try {
+          if (typeof FaceMesh === 'undefined') {
+            console.error('[FaceMesh] ❌ FaceMesh 글로벌이 없습니다! index.html에 CDN 스크립트를 확인하세요.');
+            return;
+          }
+
+          console.log('[FaceMesh] 모델 초기화 시작...');
+          const fm = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+          fm.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+          });
+          fm.onResults((results) => {
+            console.log('[FaceMesh] 결과 수신됨, faces:', results.multiFaceLandmarks?.length || 0);
+            onFaceResults(results);
+          });
+          faceMeshRef.current = fm;
+          console.log('[FaceMesh] ✅ 모델 등록 완료, interval 시작');
+
+          // 초당 3회 독립 실행
+          faceMeshInterval = setInterval(() => {
+            if (faceMeshRef.current && !faceMeshBusyRef.current && webcamRef.current?.video) {
+              faceMeshBusyRef.current = true;
+              faceMeshRef.current.send({ image: webcamRef.current.video })
+                .then(() => {
+                  faceMeshBusyRef.current = false;
+                })
+                .catch((err) => {
+                  console.error('[FaceMesh] ❌ send 실패:', err);
+                  faceMeshBusyRef.current = false;
+                });
+            }
+          }, 333);
+
+        } catch (err) {
+          console.error('[FaceMesh] ❌ 초기화 실패:', err);
+        }
+      }, 2000);  // Pose가 안정화될 때까지 2초 대기
+
     } else {
       if (cameraRef.current) { cameraRef.current.stop(); cameraRef.current = null; }
+      faceMeshRef.current = null;
       calibModeRef.current = 'NONE';
       setCalibMode('NONE');
       calibDataQueueRef.current = [];
       penaltyQueueRef.current = [];
       dangerStartTimeRef.current = null;
+      eyeClosedRef.current = false;
+      eyeCloseTimeRef.current = 0;
+      blinkTotalRef.current = 0;
+      blinkTimestampsRef.current = [];
+
+      if (onPostureData) {
+        onPostureData(null);
+      }
     }
-    return () => { if (cameraRef.current) cameraRef.current.stop(); };
-  }, [isMeasuring, onResults]);
+    return () => {
+      if (cameraRef.current) cameraRef.current.stop();
+      if (faceMeshInterval) clearInterval(faceMeshInterval);
+      if (faceMeshTimer) clearTimeout(faceMeshTimer);
+    };
+  }, [isMeasuring, onResults, onFaceResults, onPostureData]);
 
   return (
     <div className="webcam-detector">

@@ -20,7 +20,6 @@ export default function Home() {
           </p>
           <div className="hero-actions">
             <Link to={targetPath} className="btn-primary btn-large">무료로 시작하기</Link>
-            <Link to={targetPath} className="btn-secondary btn-large">데모 보기</Link>
           </div>
         </div>
         <div className="hero-visual">

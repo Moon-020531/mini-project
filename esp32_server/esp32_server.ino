@@ -1,156 +1,273 @@
-#include <WiFi.h>
-#include <WebServer.h>
+/*
+ * ==========================================================================
+ *   ESP32 Micro-ROS 거북목 알림 장치 (Wi-Fi Subscriber Node)
+ * ==========================================================================
+ *
+ *   [기능]
+ *   ROS 2 토픽 'posture_status'를 구독(Subscribe)하여,
+ *   파이썬 노드(turtle_neck_detector_v2)가 보내는 자세 판별 결과에 따라
+ *   LED와 부저를 제어합니다.
+ *
+ *   [통신 방식]
+ *   Wi-Fi를 통한 Micro-ROS Agent(UDP) 통신
+ *
+ *   [Micro-ROS Agent 실행 (PC 터미널)]
+ *   $ docker run -it --rm --net=host microros/micro-ros-agent:jazzy udp4 --port 8888
+ *
+ * ==========================================================================
+ */
 
-// 1. Wi-Fi 설정
+#include <micro_ros_arduino.h>
+#include <WiFi.h>
+
+#include <stdio.h>
+#include <rcl/rcl.h>
+#include <rcl/error_handling.h>
+#include <rclc/rclc.h>
+#include <rclc/executor.h>
+#include <std_msgs/msg/int32.h>
+#include <WiFi.h>
+
+// ======================== Wi-Fi 및 Agent 설정 ========================
 const char* ssid = "5층";
 const char* password = "48864886";
 
-// 2. 고정 IP 설정 (DHCP 대신 항상 이 IP를 사용)
-IPAddress staticIP(192, 168, 0, 21);
-IPAddress gateway(192, 168, 0, 1);
-IPAddress subnet(255, 255, 255, 0);
+// PC(WSL2가 실행되는 윈도우 호스트)의 IP 주소
+const char* agent_ip_str = "192.168.0.14";
+const uint16_t agent_port = 8888;
 
-// 2. 핀 및 하드웨어 설정 (네오픽셀 대신 일반 LED 2개 사용)
-#define GREEN_LED_PIN 13  // 초록색 LED (+) 연결 핀
-#define RED_LED_PIN   14  // 빨간색 LED (+) 연결 핀
-#define BUZZER_PIN    12  // 피에조 부저 (+) 연결 핀
+// ======================== 하드웨어 핀 설정 ========================
+#define GREEN_LED_PIN  13   // 초록 LED: 정상 자세 표시
+#define RED_LED_PIN    14   // 빨간 LED: 거북목 경고 표시
+#define BUZZER_PIN     12   // 피에조 부저: 거북목 경고 알림음
 
-// 웹 서버(포트 80) 객체 생성
-WebServer server(80);
+// 부저 설정 (LEDC)
+#define BUZZER_FREQ    1000  // 경고음 주파수 (Hz)
+#define BUZZER_CHANNEL 0     // ESP32 LEDC 채널
 
-// ★ 프론트엔드(React 웹 브라우저) 호환성을 위한 CORS 헤더 함수
-void sendCORSHeaders() {
-  server.sendHeader("Access-Control-Allow-Origin", "*"); // 모든 위치에서의 통신 허용
-  server.sendHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+// ======================== Micro-ROS 객체 ========================
+rcl_subscription_t subscriber;
+std_msgs__msg__Int32 msg;
+rclc_executor_t executor;
+rclc_support_t support;
+rcl_allocator_t allocator;
+rcl_node_t node;
+
+// ======================== 상태 관리 ========================
+int current_posture = 0;
+
+enum AgentState {
+  WAITING_AGENT,      // Agent 연결 대기 중
+  AGENT_AVAILABLE,    // Agent 감지됨 → 초기화 진행
+  AGENT_CONNECTED,    // Agent 연결 완료 → 정상 동작 중
+  AGENT_DISCONNECTED  // Agent 연결 끊김 → 재연결 시도
+};
+AgentState state = WAITING_AGENT;
+
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if (temp_rc != RCL_RET_OK) { error_loop(); } }
+#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; (void)temp_rc; }
+
+// ======================== 함수 정의 ========================
+
+void error_loop() {
+  while (1) {
+    digitalWrite(RED_LED_PIN, !digitalRead(RED_LED_PIN));
+    delay(100);
+  }
 }
 
-// 정상 상태 (/normal) 요청이 들어왔을 때 실행할 함수
-void handleNormal() {
+void set_normal_posture() {
   digitalWrite(GREEN_LED_PIN, HIGH);
   digitalWrite(RED_LED_PIN, LOW);
-  noTone(BUZZER_PIN); 
-  
-  sendCORSHeaders(); // 응답 전송 전에 CORS 헤더 추가
-  server.send(200, "text/plain", "Status: NORMAL - Green LED ON, Red LED OFF, Buzzer OFF");
-  Serial.println("상태: 바른 자세 (GREEN LED ON)");
+  ledcWrite(BUZZER_PIN, 0);  // 부저 끄기
+  Serial.println("[ROS2] 상태: 바른 자세 (GREEN LED ON)");
 }
 
-// 거북목 경고 상태 (/warning) 요청이 들어왔을 때 실행할 함수
-void handleWarning() {
-  digitalWrite(RED_LED_PIN, HIGH);
+void set_warning_posture() {
   digitalWrite(GREEN_LED_PIN, LOW);
-  tone(BUZZER_PIN, 1000); 
-  
-  sendCORSHeaders(); // 응답 전송 전에 CORS 헤더 추가
-  server.send(200, "text/plain", "Status: WARNING - Red LED ON, Green LED OFF, Buzzer ON");
-  Serial.println("상태: 거북목 감지! (RED LED ON)");
+  digitalWrite(RED_LED_PIN, HIGH);
+  ledcWrite(BUZZER_PIN, 128);  // 부저 켜기 (듀티 50%)
+  Serial.println("[ROS2] 상태: 거북목 감지! (RED LED ON, BUZZER ON)");
 }
 
-// 웹 브라우저(React)가 전송하는 OPTIONS(사전 검증) 요청을 처리하는 함수
-void handleOptions() {
-  sendCORSHeaders();
-  server.send(204); 
+void set_waiting_pattern() {
+  static unsigned long last_blink = 0;
+  if (millis() - last_blink > 500) {
+    digitalWrite(GREEN_LED_PIN, !digitalRead(GREEN_LED_PIN));
+    digitalWrite(RED_LED_PIN, LOW);
+    last_blink = millis();
+  }
 }
+
+// 토픽 수신 콜백 함수
+void subscription_callback(const void * msgin) {
+  const std_msgs__msg__Int32 * incoming = (const std_msgs__msg__Int32 *)msgin;
+  int received_value = incoming->data;
+
+  if (received_value != current_posture) {
+    current_posture = received_value;
+    if (current_posture == 0) {
+      set_normal_posture();
+    } else {
+      set_warning_posture();
+    }
+  }
+}
+
+bool check_agent() {
+  return (RMW_RET_OK == rmw_uros_ping_agent(100, 1));
+}
+
+bool create_entities() {
+  allocator = rcl_get_default_allocator();
+
+  RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+
+  RCCHECK(rclc_node_init_default(
+    &node,
+    "esp32_posture_node",
+    "",
+    &support
+  ));
+
+  RCCHECK(rclc_subscription_init_best_effort(
+    &subscriber,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+    "posture_status"
+  ));
+
+  RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
+
+  RCCHECK(rclc_executor_add_subscription(
+    &executor,
+    &subscriber,
+    &msg,
+    &subscription_callback,
+    ON_NEW_DATA
+  ));
+
+  return true;
+}
+
+void destroy_entities() {
+  rmw_context_t * rmw_context = rcl_context_get_rmw_context(&support.context);
+  (void) rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
+
+  RCSOFTCHECK(rcl_subscription_fini(&subscriber, &node));
+  RCSOFTCHECK(rcl_node_fini(&node));
+  RCSOFTCHECK(rclc_support_fini(&support));
+  rclc_executor_fini(&executor);
+}
+
+// ======================== Arduino 메인 ========================
 
 void setup() {
   Serial.begin(115200);
-  
-  // 핀들을 출력(OUTPUT) 모드로 설정
+
   pinMode(GREEN_LED_PIN, OUTPUT);
   pinMode(RED_LED_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
 
-  // 초기 상태는 모든 LED와 부저 끄기
+  ledcAttach(BUZZER_PIN, BUZZER_FREQ, 8);
+  ledcWrite(BUZZER_PIN, 0);
+
   digitalWrite(GREEN_LED_PIN, LOW);
   digitalWrite(RED_LED_PIN, LOW);
-  noTone(BUZZER_PIN);
 
-  // Wi-Fi 연결 시도 
-  // Wi-Fi 자동 재연결 설정
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(true);
-
-  // ★ 고정 IP 적용 (DHCP 대신 항상 192.168.0.21 사용)
-  WiFi.config(staticIP, gateway, subnet);
-
+  // Wi-Fi 수동 연결 및 상태 출력
   Serial.println();
-  Serial.print("Wi-Fi 연결 중: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
+  Serial.print("[Wi-Fi] '"); Serial.print(ssid); Serial.println("' 네트워크에 연결 시도 중...");
   
-  // WiFi 연결 대기 (최대 15초) - 연결 중에는 빨간 LED 깜빡임
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-    digitalWrite(RED_LED_PIN, !digitalRead(RED_LED_PIN)); // 빨간 LED 깜빡임
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
-    attempts++;
-  }
-  digitalWrite(RED_LED_PIN, LOW); // 깜빡임 중지
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("");
-    Serial.println("Wi-Fi 연결 성공!");
-    
-    // ★ 시리얼 모니터 없이도 확인 가능: 초록 LED 3번 깜빡임 = WiFi 연결 성공!
-    for (int i = 0; i < 3; i++) {
-      digitalWrite(GREEN_LED_PIN, HIGH);
-      delay(200);
-      digitalWrite(GREEN_LED_PIN, LOW);
-      delay(200);
-    }
-    digitalWrite(GREEN_LED_PIN, HIGH); // 마지막에 초록 LED 켜짐 유지 = 준비 완료
-  } else {
-    Serial.println("\nWi-Fi 연결 실패!");
-    // ★ 빨간 LED 계속 켜짐 = WiFi 연결 실패
-    digitalWrite(RED_LED_PIN, HIGH);
+    digitalWrite(GREEN_LED_PIN, !digitalRead(GREEN_LED_PIN)); // 연결 중 초록불 토글
   }
   
-  // ★중요: 할당받은 IP 주소 출력 (이 주소가 리액트 코드의 ESP32_URL과 일치해야 함)
-  Serial.print("ESP32 IP 주소: ");
-  Serial.println(WiFi.localIP()); 
+  Serial.println();
+  Serial.println("[Wi-Fi] 연결 성공!");
+  Serial.print("[Wi-Fi] ESP32 IP 주소: ");
+  Serial.println(WiFi.localIP());
 
-  // 라우팅 (경로 지정)
-  server.on("/normal", handleNormal);
-  server.on("/warning", handleWarning);
-  
-  // 찾을 수 없는 경로(또는 OPTIONS 요청)가 들어왔을 때의 처리
-  server.onNotFound([]() {
-    if (server.method() == HTTP_OPTIONS) {
-      handleOptions(); 
-    } else {
-      sendCORSHeaders();
-      server.send(404, "text/plain", "Not Found");
-    }
-  });
-  
-  // 웹 서버 시작
-  server.begin();
-  Serial.println("HTTP 웹 서버 대기 중...");
+  // Micro-ROS Wi-Fi 전송 설정
+  Serial.print("[Micro-ROS] Agent IP: "); Serial.println(agent_ip_str);
+  Serial.print("[Micro-ROS] Agent Port: "); Serial.println(agent_port);
+
+  // 이미 Wi-Fi에 연결되어 있으므로 아래 함수는 전송 계층만 설정합니다.
+  set_microros_wifi_transports((char*)ssid, (char*)password, (char*)agent_ip_str, agent_port);
+
+  state = WAITING_AGENT;
+
+  Serial.println("===========================================");
+  Serial.println("  ESP32 Micro-ROS 거북목 알림 장치 (Wi-Fi)");
+  Serial.println("===========================================");
 }
 
 void loop() {
-  // Wi-Fi 끊김 감지 및 자동 재연결
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Wi-Fi 연결이 끊겼습니다. 재연결 시도 중...");
-    WiFi.disconnect();
-    WiFi.begin(ssid, password);
-    unsigned long startAttemptTime = millis();
-    
-    // 5초간 재연결 대기
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 5000) {
-      delay(500);
-      Serial.print(".");
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWi-Fi 재연결 성공! IP: " + WiFi.localIP().toString());
-    } else {
-      Serial.println("\n재연결 실패. 다음 루프에서 다시 시도합니다.");
-    }
+  switch (state) {
+    case WAITING_AGENT:
+      {
+        set_waiting_pattern();
+        
+        static unsigned long last_debug_time = 0;
+        if (millis() - last_debug_time > 2000) {
+          Serial.println("[Micro-ROS] PC의 Agent(192.168.0.3:8888) 응답을 기다리는 중...");
+          last_debug_time = millis();
+        }
+
+        if (check_agent()) {
+          Serial.println("[Micro-ROS] Agent 감지 완료! 통신 초기화를 시작합니다...");
+          state = AGENT_AVAILABLE;
+        }
+      }
+      break;
+
+    case AGENT_AVAILABLE:
+      if (create_entities()) {
+        Serial.println("[Micro-ROS] 노드 및 구독자 생성 완료!");
+        Serial.println("[Micro-ROS] 'posture_status' 토픽 수신 대기 중...");
+
+        for (int i = 0; i < 3; i++) {
+          digitalWrite(GREEN_LED_PIN, HIGH);
+          delay(150);
+          digitalWrite(GREEN_LED_PIN, LOW);
+          delay(150);
+        }
+
+        set_normal_posture();
+        state = AGENT_CONNECTED;
+      } else {
+        state = WAITING_AGENT;
+      }
+      break;
+
+    case AGENT_CONNECTED:
+      RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100)));
+
+      if (!check_agent()) {
+        Serial.println("[Micro-ROS] Agent 연결이 끊겼습니다!");
+        state = AGENT_DISCONNECTED;
+      }
+      break;
+
+    case AGENT_DISCONNECTED:
+      Serial.println("[Micro-ROS] 리소스 정리 후 재연결을 시도합니다...");
+      destroy_entities();
+
+      for (int i = 0; i < 3; i++) {
+        digitalWrite(RED_LED_PIN, HIGH);
+        delay(200);
+        digitalWrite(RED_LED_PIN, LOW);
+        delay(200);
+      }
+
+      state = WAITING_AGENT;
+      break;
+
+    default:
+      break;
   }
 
-  // 클라이언트(React 대시보드)의 접속 요청 처리
-  server.handleClient();
-  delay(10); // 코어 안정을 위한 짧은 딜레이
+  delay(10);
 }

@@ -585,8 +585,16 @@ body {
   font-weight: 700;
 }
 
+.analysis-widgets-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 32px;
+}
+
 @media (max-width: 1024px) {
   .main-content-grid { grid-template-columns: 1fr; }
+  .analysis-widgets-row { grid-template-columns: 1fr; }
 }
 
 
@@ -1119,3 +1127,200 @@ body {
   fill: var(--accent-red) !important;
   animation: heartbeat 2s infinite ease-in-out !important;
 }
+
+/* ========================================================
+   실시간 종합 자세 점수 위젯 (Posture Score Widget)
+   ======================================================== */
+.posture-score-widget {
+  border-radius: 28px;
+  padding: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+  transition: all 0.4s ease;
+  position: relative;
+  overflow: hidden;
+}
+.posture-score-widget.active {
+  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow: 0 8px 32px rgba(16, 185, 129, 0.08);
+}
+.psw-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.psw-header h3 {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 0;
+}
+.psw-icon { font-size: 24px; }
+.psw-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+.psw-score-ring {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 6px solid #10b981;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 185, 129, 0.04);
+  transition: border-color 0.5s ease;
+  box-shadow: 0 0 24px rgba(16, 185, 129, 0.1);
+}
+.psw-score-value {
+  font-size: 42px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -2px;
+  font-family: 'Inter', sans-serif;
+  transition: color 0.5s ease;
+}
+.psw-score-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.psw-breakdown {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.psw-metric {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.psw-metric-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  min-width: 100px;
+  white-space: nowrap;
+}
+.psw-metric-bar-wrap {
+  flex: 1;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.psw-metric-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.6s ease, background 0.4s ease;
+  min-width: 2px;
+}
+.psw-metric-value {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-primary);
+  min-width: 48px;
+  text-align: right;
+}
+.psw-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ========================================================
+   눈 피로도 모니터 위젯 (Eye Fatigue Widget)
+   ======================================================== */
+.eye-fatigue-widget {
+  border-radius: 28px;
+  padding: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+  transition: all 0.4s ease;
+}
+.eye-fatigue-widget.fatigued {
+  border-color: rgba(239, 68, 68, 0.3);
+  box-shadow: 0 8px 32px rgba(239, 68, 68, 0.08);
+}
+.efw-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.efw-header h3 {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 0;
+}
+.efw-icon { font-size: 24px; }
+.efw-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.efw-stats-row {
+  display: flex;
+  gap: 12px;
+}
+.efw-stat {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 16px;
+  border-radius: 16px;
+  text-align: center;
+  border: 1px solid rgba(0,0,0,0.04);
+}
+.efw-stat-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 6px;
+}
+.efw-stat-value {
+  font-size: 24px;
+  font-weight: 900;
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+}
+.efw-stat-value.danger { color: #ef4444; }
+.efw-stat-value.safe { color: #10b981; }
+.efw-alert {
+  padding: 12px 16px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 700;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08), rgba(239, 68, 68, 0.04));
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  animation: alertPulse 2s infinite alternate ease-in-out;
+}
+.efw-alert.warning {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(245, 158, 11, 0.04));
+  color: #d97706;
+  border-color: rgba(245, 158, 11, 0.15);
+}
+@keyframes alertPulse {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 12px 0 rgba(239, 68, 68, 0.1); }
+}
+.efw-empty {
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+}
+

@@ -8,5 +8,6 @@ import lombok.Setter;
 public class PostureLogRequest {
     private Integer goodPostureTime;
     private Integer warningCount;
+    private Integer postureScore;
     private String username;
 }

@@ -10,31 +10,26 @@ export default function Dashboard() {
   const [allUsersLogs, setAllUsersLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // 목표 시간 (분 단위)
   const [goalMinutes, setGoalMinutes] = useState(() => {
     const saved = localStorage.getItem('turtleGoalMinutes');
     return saved ? parseInt(saved, 10) : 30;
   });
 
-  // 실시간 세션 타이머 (초 단위)
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [isPresent, setIsPresent] = useState(true); // 자리 비움 감지용
+  const [isPresent, setIsPresent] = useState(true);
   const [sessionTime, setSessionTime] = useState(0);
-  const [showGoalModal, setShowGoalModal] = useState(false); // 목표 달성 축하 모달
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [postureData, setPostureData] = useState(null);
 
-  const webcamRef = useRef(null); // WebcamDetector의 내부 메서드 접근용
-
+  const webcamRef = useRef(null);
   const navigate = useNavigate();
   const username = localStorage.getItem('username');
 
   const fetchLogs = useCallback(async () => {
     if (!username) return;
     try {
-      // 1. 내 로그 가져오기
       const res = await axios.get(`${API_URL}?username=${username}`);
       setLogs(res.data);
-      
-      // 2. 전체 유저 로그 가져오기 (리더보드용)
       const allRes = await axios.get(API_URL);
       setAllUsersLogs(allRes.data);
     } catch (err) {
@@ -54,7 +49,6 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [fetchLogs, navigate]);
 
-  // 실시간 세션 작동 타이머 (목표 시간 도달 시 정지, 자리 비움 시 일시정지)
   useEffect(() => {
     let timer;
     if (isCameraActive) {
@@ -63,14 +57,10 @@ export default function Dashboard() {
           setSessionTime(prev => {
             const goalInSeconds = goalMinutes * 60;
             if (prev + 1 === goalInSeconds) {
-              setShowGoalModal(true); // 목표 달성 순간 팝업 띄우기
-              if (webcamRef.current) {
-                webcamRef.current.stopMeasurement(); // AI 카메라도 자동으로 완전 종료
-              }
+              setShowGoalModal(true);
+              if (webcamRef.current) webcamRef.current.stopMeasurement();
             }
-            if (prev >= goalInSeconds) {
-              return goalInSeconds;
-            }
+            if (prev >= goalInSeconds) return goalInSeconds;
             return prev + 1;
           });
         }
@@ -89,8 +79,7 @@ export default function Dashboard() {
 
   const todayLogs = logs.filter(log => {
     const logDate = new Date(log.recordTime);
-    const today = new Date();
-    return logDate.toDateString() === today.toDateString();
+    return logDate.toDateString() === new Date().toDateString();
   });
 
   const totalGoodTime = todayLogs.reduce((sum, l) => sum + (l.goodPostureTime || 0), 0);
@@ -105,27 +94,20 @@ export default function Dashboard() {
     return sec > 0 ? `${min}분 ${sec}초` : `${min}분`;
   };
 
-  // 목표 달성률 계산
   const goalInSeconds = goalMinutes * 60;
   const progressPercent = Math.min((sessionTime / goalInSeconds) * 100, 100) || 0;
   const isGoalReached = progressPercent >= 100;
 
-  // ==== 리더보드 계산 로직 ====
-  const todayAllLogs = allUsersLogs.filter(log => {
-    const logDate = new Date(log.recordTime);
-    return logDate.toDateString() === new Date().toDateString();
-  });
-  
-  const userRankings = Array.from(
-    todayAllLogs.reduce((acc, log) => {
-      const u = log.username || '익명';
-      if (!acc.has(u)) acc.set(u, 0);
-      acc.set(u, acc.get(u) + (log.goodPostureTime || 0));
-      return acc;
-    }, new Map())
-  )
-    .sort((a, b) => b[1] - a[1]) // 내림차순 정렬
-    .slice(0, 5); // TOP 5 추출
+  const getScoreColor = (score) => {
+    if (score >= 80) return '#10b981';
+    if (score >= 60) return '#fbbf24';
+    return '#ef4444';
+  };
+  const getScoreLabel = (score) => {
+    if (score >= 80) return '우수';
+    if (score >= 60) return '주의';
+    return '위험';
+  };
 
   if (loading) {
     return <div className="loading-state"><div className="loading-spinner" />대시보드 데이터 로딩...</div>;
@@ -137,11 +119,17 @@ export default function Dashboard() {
         <h1>{username}님의 워크스페이스 ✨</h1>
         <p>나만의 프리미엄 인체공학 모니터링 룸</p>
       </header>
-      
-      {/* 실시간 모니터링 및 사이드 위젯 그리드 */}
+
+      {/* ===== 1. 상단: 오늘의 통계 요약 ===== */}
+      <section className="stats-grid">
+        <div className="stat-card green"><div className="label">바른 자세 유지</div><div className="value">{formatTime(totalGoodTime)}</div></div>
+        <div className="stat-card red"><div className="label">거북목 경고</div><div className="value">{totalWarnings}회</div></div>
+        <div className="stat-card blue"><div className="label">측정 세션</div><div className="value">{totalSessions}회</div></div>
+        <div className="stat-card purple"><div className="label">세션 평균</div><div className="value">{formatTime(avgGoodPerSession)}</div></div>
+      </section>
+
+      {/* ===== 2. 중앙: 웹캠 + 포커스 타이머 ===== */}
       <section className="main-content-grid">
-        
-        {/* 좌측: AI 웹캠 (메인 뷰포트 영역 보장) */}
         <div className="webcam-column">
           <WebcamDetector 
             ref={webcamRef}
@@ -149,16 +137,13 @@ export default function Dashboard() {
             onDataSaved={fetchLogs} 
             onMeasuringChange={setIsCameraActive} 
             onPresenceChange={setIsPresent}
+            onPostureData={setPostureData}
           />
         </div>
         
-        {/* 우측: 사이드 패널 (포커스 타이머 & 가이드) */}
         <div className="side-panel-column">
-          
-          {/* 1. 애니메이션 빵빵한 라이브 포커스 타이머 (사이드바 배치로 한눈에 보임) */}
           <div className="animated-focus-widget">
             <div className="afw-bg-glow"></div>
-            
             <div className="afw-header">
               <h2 className="afw-title">🌿 Focus Session</h2>
               <span className="afw-subtitle">
@@ -170,24 +155,18 @@ export default function Dashboard() {
                     </span>
                   ) : (
                     <span style={{color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center'}}>
-                      🈳 자리 비움 (일시 정지)
+                      자리 비움 (일시 정지)
                     </span>
                   )
                 ) : '카메라 대기 중'}
               </span>
             </div>
-
             <div className="afw-timer-display">
               <span className="afw-time">{formatTime(sessionTime)}</span>
             </div>
-
-            {/* 움직이는 진짜 '길(Road)' 디자인이 적용된 트랙 */}
             <div className={`afw-track-wrapper ${isCameraActive ? 'active' : 'idle'}`}>
               <div className="afw-track-bg">
-                <div 
-                  className="afw-track-fill" 
-                  style={{ width: `${progressPercent}%` }}
-                ></div>
+                <div className="afw-track-fill" style={{ width: `${progressPercent}%` }}></div>
                 <div 
                   className={`afw-runner ${isCameraActive ? 'active' : 'idle'}`}
                   style={{ left: `calc(${progressPercent}% - ${progressPercent > 95 ? 28 : 0}px)` }}
@@ -195,74 +174,107 @@ export default function Dashboard() {
                   <div className="afw-runner-inner"></div>
                   <img 
                     src="https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Turtle/3D/turtle_3d.png" 
-                    alt="Cute 3D Turtle" 
-                    className="afw-runner-img" 
+                    alt="Cute 3D Turtle" className="afw-runner-img" 
                   />
                 </div>
-                
-                {/* 트랙의 도착 지점 거북이 먹이 */}
-                <div className="afw-finish-flag">
-                  🥬
-                </div>
+                <div className="afw-finish-flag">🥬</div>
               </div>
             </div>
-
             <div className="afw-controls">
               <div>달성률 <strong>{progressPercent.toFixed(1)}%</strong></div>
               <div style={{display:'flex', alignItems:'center', gap:'6px'}}>
                 목표
-                <input 
-                  type="number" 
-                  value={goalMinutes} 
-                  onChange={handleGoalChange} 
-                  min="1" max="999" 
-                  className="afw-goal-input" 
-                />
+                <input type="number" value={goalMinutes} onChange={handleGoalChange} min="1" max="999" className="afw-goal-input" />
                 분
               </div>
             </div>
-            
             {isGoalReached && (
-              <div className="afw-celebration">
-                🎉 와우! 목표를 정복했어요! 🎉
-              </div>
+              <div className="afw-celebration">🎉 와우! 목표를 정복했어요! 🎉</div>
             )}
           </div>
-          
-          {/* 2. 오늘의 거북목 경고 누적 위젯 (한눈에 경고 상태 파악) */}
-          <div className={`animated-warning-widget ${totalWarnings >= 5 ? 'danger' : totalWarnings >= 2 ? 'warning' : 'safe'}`}>
-            <div className="aww-bg-glow"></div>
-            <div className="aww-content">
-              <div className="aww-header">
-                <span className="aww-icon">{totalWarnings >= 5 ? '🚨' : totalWarnings >= 2 ? '⚠️' : '🛡️'}</span>
-                <h3>오늘의 거북목 경고 누적</h3>
-              </div>
-              <div className="aww-body">
-                <div className="aww-number">
-                  {totalWarnings}<span className="aww-unit">회</span>
-                </div>
-                <p className="aww-text">
-                  {totalWarnings === 0 ? '✨ 아주 훌륭해요! 완벽한 바른 자세 유지 중!' :
-                   totalWarnings < 2 ? '💡 자세가 앞쪽으로 가끔 쏠리고 있어요.' :
-                   totalWarnings < 5 ? '🔥 주의! 현재 확실한 거북목 진행 구간입니다.' : 
-                   '🚨 심각한 자세 붕괴! 즉시 목 스트레칭을 하세요!'}
-                </p>
-              </div>
+
+          {/* 실시간 자세 점수 */}
+          <div className={`posture-score-widget ${postureData ? 'active' : ''}`}>
+            <div className="psw-header">
+              <span className="psw-icon">🎯</span>
+              <h3>실시간 자세 점수</h3>
             </div>
+            {postureData ? (
+              <div className="psw-body">
+                <div className="psw-score-ring" style={{borderColor: getScoreColor(postureData.postureScore)}}>
+                  <span className="psw-score-value" style={{color: getScoreColor(postureData.postureScore)}}>
+                    {postureData.postureScore}
+                  </span>
+                  <span className="psw-score-label">{getScoreLabel(postureData.postureScore)}</span>
+                </div>
+                <div className="psw-breakdown">
+                  <div className="psw-metric">
+                    <span className="psw-metric-label">🦴 거북목 (CVA)</span>
+                    <div className="psw-metric-bar-wrap">
+                      <div className="psw-metric-bar" style={{width: `${postureData.scoreCva}%`, background: postureData.scoreCva >= 70 ? '#10b981' : postureData.scoreCva >= 40 ? '#fbbf24' : '#ef4444'}}></div>
+                    </div>
+                    <span className="psw-metric-value">{postureData.cvaAngle}°</span>
+                  </div>
+                  <div className="psw-metric">
+                    <span className="psw-metric-label">🙆 어깨 균형</span>
+                    <div className="psw-metric-bar-wrap">
+                      <div className="psw-metric-bar" style={{width: `${postureData.scoreShoulder}%`, background: postureData.scoreShoulder >= 70 ? '#10b981' : postureData.scoreShoulder >= 40 ? '#fbbf24' : '#ef4444'}}></div>
+                    </div>
+                    <span className="psw-metric-value">{postureData.shoulderTilt}°</span>
+                  </div>
+                  <div className="psw-metric">
+                    <span className="psw-metric-label">📏 모니터 거리</span>
+                    <div className="psw-metric-bar-wrap">
+                      <div className="psw-metric-bar" style={{width: `${postureData.scoreDistance}%`, background: postureData.scoreDistance >= 70 ? '#10b981' : postureData.scoreDistance >= 40 ? '#fbbf24' : '#ef4444'}}></div>
+                    </div>
+                    <span className="psw-metric-value">{postureData.distanceCm > 0 ? `${postureData.distanceCm}cm` : '-'}</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="psw-empty"><p>카메라를 켜면 자세 분석이 시작됩니다</p></div>
+            )}
           </div>
-          
+
+          {/* 눈 피로도 */}
+          <div className={`eye-fatigue-widget ${postureData?.isFatigued ? 'fatigued' : ''}`}>
+            <div className="efw-header">
+              <span className="efw-icon">{postureData?.isFatigued ? '😵' : '👁️'}</span>
+              <h3>눈 피로도 모니터</h3>
+            </div>
+            {postureData ? (
+              <div className="efw-body">
+                <div className="efw-stats-row">
+                  <div className="efw-stat">
+                    <span className="efw-stat-label">EAR 수치</span>
+                    <span className="efw-stat-value">{postureData.ear}</span>
+                  </div>
+                  <div className="efw-stat">
+                    <span className="efw-stat-label">분당 깜빡임</span>
+                    <span className={`efw-stat-value ${postureData.blinksPerMin < 15 ? 'danger' : 'safe'}`}>
+                      {postureData.blinksPerMin}회
+                    </span>
+                  </div>
+                </div>
+                {postureData.isFatigued && (
+                  <div className="efw-alert">⚠️ 피로도 누적: 인공눈물 점안 및 휴식 권장</div>
+                )}
+                {postureData.isTooClose && (
+                  <div className="efw-alert warning">📏 모니터와 너무 가깝습니다! (권장: 40cm 이상)</div>
+                )}
+                {postureData.isShoulderAsymmetry && (
+                  <div className="efw-alert warning">🙆 어깨 비대칭 감지! 자세를 교정해 주세요.</div>
+                )}
+              </div>
+            ) : (
+              <div className="efw-empty"><p>측정 대기 중...</p></div>
+            )}
+          </div>
+
         </div>
       </section>
 
-      {/* 모니터링 통계 숫자 요약 판 */}
-      <section className="stats-grid" style={{marginTop: '40px'}}>
-        <div className="stat-card green"><div className="label">바른 자세 유지</div><div className="value">{formatTime(totalGoodTime)}</div></div>
-        <div className="stat-card red"><div className="label">거북목 경고 누적</div><div className="value">{totalWarnings}회</div></div>
-        <div className="stat-card blue"><div className="label">총 측정 세션</div><div className="value">{totalSessions}회</div></div>
-        <div className="stat-card purple"><div className="label">세션당 평균 유지</div><div className="value">{formatTime(avgGoodPerSession)}</div></div>
-      </section>
-
-      {/* 목표 달성 축하 팝업 모달 */}
+      {/* 목표 달성 모달 */}
       {showGoalModal && (
         <div className="goal-modal-overlay fade-in">
           <div className="goal-modal-content">
@@ -273,18 +285,14 @@ export default function Dashboard() {
               바른 자세로 성공적인 집중을 이루어냈습니다 🌿
             </p>
             <div className="goal-modal-actions">
-              <button 
-                className="btn-primary" 
-                onClick={() => setShowGoalModal(false)}
-                style={{ width: '100%', padding: '14px', fontSize: '16px' }}
-              >
+              <button className="btn-primary" onClick={() => setShowGoalModal(false)}
+                style={{ width: '100%', padding: '14px', fontSize: '16px' }}>
                 닫기
               </button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }

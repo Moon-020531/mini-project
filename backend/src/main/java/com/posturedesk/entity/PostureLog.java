@@ -27,6 +27,9 @@ public class PostureLog {
     @Column(name = "warning_count", nullable = false)
     private Integer warningCount;
 
+    @Column(name = "posture_score")
+    private Integer postureScore;
+
     @Column(nullable = false)
     private String username;
 

@@ -1,85 +1,71 @@
 # 🌿 ZenDesk (스마트 데스크 대시보드)
 
-사용자의 자세를 실시간으로 분석하여 거북목을 예방하고, 올바른 자세 습관을 기르도록 돕는 **IoT 기반 스마트 데스크 시스템**입니다.
+사용자의 자세와 눈 건강을 실시간으로 분석하여 거북목을 예방하고 최적의 작업 환경을 제공하는 **IoT 기반 스마트 데스크 시스템**입니다.
 
-웹캠을 통한 AI 비전 분석, 시각/청각적 피드백을 제공하는 IoT 디바이스, 그리고 개인의 자세 기록을 관리하는 웹 대시보드가 하나로 통합되어 있습니다.
+웹캠을 통한 고성능 비전 분석, IoT 디바이스 연동 피드백, 그리고 누적된 데이터를 통한 정밀한 건강 리포트를 제공합니다.
 
 ---
 
 ## ✨ 주요 기능
 
-1. **실시간 자세 감지 (AI Vision)**
-   - MediaPipe를 활용하여 사용자의 어깨, 귀, 눈 등의 랜드마크를 추출하고 거북목 여부를 실시간 판별합니다.
-2. **즉각적인 피드백 (IoT Hardware)**
-   - 거북목 자세가 감지되면 ESP32를 통해 즉시 빨간 LED와 부저가 울려 사용자에게 경고합니다. (정상 자세 복귀 시 초록 LED 점등)
-3. **자세 데이터 로깅 및 통계 (Web Dashboard)**
-   - 개인별 자세 기록(정상 자세 유지 시간, 경고 횟수 등)을 DB에 저장하고, 캘린더와 차트를 통해 시각화합니다.
-4. **소셜 로그인 연동**
-   - 자체 회원가입 외에도 **Google** 및 **Naver** OAuth 2.0 로그인을 지원하여 빠르고 안전하게 접근할 수 있습니다.
+### 1. 고성능 실시간 자세 분석 (AI Vision)
+- **거북목 감지 (CVA Analysis):** MediaPipe Pose를 활용해 귀와 어깨의 각도(CVA)를 계산하여 거북목을 정밀 판별합니다.
+- **어깨 비대칭 모니터링:** 양쪽 어깨의 수평도를 분석하여 척추 건강을 체크합니다.
+- **모니터 거리 측정:** 사용자의 얼굴 크기를 기반으로 모니터와의 적정 거리 유지 여부를 감지합니다.
+
+### 2. 눈 피로도 및 깜빡임 감지 (Ocular Health)
+- **눈 깜빡임 카운팅:** MediaPipe Face Mesh와 EAR(Eye Aspect Ratio) 수식을 사용하여 실시간 깜빡임 횟수를 측정합니다.
+- **피로도 경고:** 분당 깜빡임 횟수가 정상 수치(15회) 이하로 떨어지거나 눈을 오랫동안 뜨고 있을 경우 "인공눈물 점안 및 휴식 권장" 경고를 보냅니다.
+- **최적화 엔진:** 비동기 모델 실행 로직을 적용하여 브라우저 환경에서도 끊김 없는 60FPS 모니터링을 실현했습니다.
+
+### 3. IoT 하드웨어 연동 (Smart Feedback)
+- **즉각적인 경고:** 거북목 또는 피로 상태 감지 시 ESP32 디바이스를 통해 LED(Red)와 부저로 사용자에게 즉각적인 피드백을 제공합니다.
+- **상태 표시:** 올바른 자세 유지 시 Green LED를 통해 긍정적인 강화 학습을 유도합니다.
 
 ---
 
-## 🏗 시스템 아키텍처 및 기술 스택
+## 🏗 기술 스택
 
-본 프로젝트는 크게 4개의 독립적인 모듈로 구성됩니다.
+### Frontend
+- **Framework:** React, Vite
+- **UI/UX:** Vanilla CSS (Glassmorphism), Lucide React
+- **Vision AI:** MediaPipe (Pose, Face Mesh), TensorFlow.js
+- **Communication:** Axios, WebSocket/HTTP
 
-### 1. Frontend (React + Vite)
-- **경로:** `/frontend`
-- **기술:** React, React Router, Axios, Tailwind CSS, Vanilla CSS
-- **기능:** 대시보드 UI, 캘린더 기록 확인, 소셜 로그인 연동(Google GSI, Naver OAuth)
-- **실행:** `npm run dev` (Port: 5173)
+### Backend
+- **Framework:** Spring Boot 3
+- **Language:** Java 17
+- **Database:** MySQL 8.0, Spring Data JPA
+- **Security:** Spring Security, OAuth 2.0 (Google, Naver)
 
-### 2. Backend (Spring Boot)
-- **경로:** `/backend`
-- **기술:** Java 17, Spring Boot 3, Spring Data JPA, MySQL, OAuth2 Client
-- **기능:** 유저 관리, 소셜 로그인 인증, 자세 로그 데이터 저장 및 조회 REST API
-- **실행:** `./gradlew bootRun` (Port: 8080)
-
-### 3. AI Detector (Python)
-- **경로:** `/turtle_neck_detector_backup.py` (루트 디렉토리)
-- **기술:** Python, OpenCV, MediaPipe, Requests
-- **기능:** 웹캠 영상 처리, 거북목 알고리즘 판별, ESP32 및 Spring Boot 백엔드로 상태 전송
-- **실행:** `python turtle_neck_detector_backup.py`
-
-### 4. IoT Hardware (ESP32)
-- **경로:** `/esp32_server/esp32_server.ino`
-- **기술:** C++ (Arduino IDE), ESP32 WebServer
-- **기능:** 고정 IP(`192.168.0.21`)로 웹 서버 대기, `/warning`, `/normal` 라우팅에 따라 외부 LED 및 부저 제어
+### IoT & AI Script
+- **Hardware:** ESP32 (Arduino C++)
+- **Python:** OpenCV, MediaPipe (Legacy/Backup 지원용)
 
 ---
 
-## 🚀 시작하기 (Getting Started)
+## 🚀 시작하기
 
-### 1. DB 및 Backend 설정
-1. MySQL에 `turtle_neck_db` 데이터베이스를 생성합니다.
-2. `backend/src/main/resources/application.properties` 에서 DB 계정 정보를 맞게 수정합니다.
-3. 소셜 로그인을 사용하려면 아래 파일들을 생성하여 API 키를 입력합니다. (해당 파일들은 Git에서 자동 제외됩니다)
-   - **`backend/src/main/resources/application-secret.properties`**
-     ```properties
-     google.client.id=발급받은_구글_클라이언트_ID
-     google.client.secret=발급받은_구글_클라이언트_SECRET
-     naver.client.id=발급받은_네이버_클라이언트_ID
-     naver.client.secret=발급받은_네이버_클라이언트_SECRET
-     ```
+### 1. 백엔드 설정
+1. MySQL에 `turtle_neck_db` 데이터베이스 생성
+2. `backend/src/main/resources/application.properties` 설정 확인
+3. OAuth 2.0 API 키 입력 (`application-secret.properties` 생성 필요)
 
-### 2. Frontend 설정
-1. `frontend` 디렉토리로 이동하여 패키지를 설치합니다: `npm install`
-2. 환경 변수 파일 **`frontend/.env.local`**을 생성하고 아래 값을 입력합니다.
-   ```env
-   VITE_GOOGLE_CLIENT_ID=발급받은_구글_클라이언트_ID
-   VITE_NAVER_CLIENT_ID=발급받은_네이버_클라이언트_ID
-   ```
+### 2. 프론트엔드 설정
+1. `frontend` 디렉토리에서 `npm install`
+2. `.env.local` 파일에 클라이언트 ID 설정
 
-### 3. ESP32 하드웨어 설정
-1. ESP32를 PC에 연결하고 Arduino IDE를 엽니다.
-2. `esp32_server.ino` 상단의 와이파이 SSID와 비밀번호를 현재 네트워크에 맞게 수정합니다.
-3. 고정 IP(`192.168.0.21`)를 사용하므로, PC(Python)와 ESP32가 같은 공유기/네트워크에 연결되어 있어야 합니다.
-4. 코드를 업로드합니다. (업로드 후 시리얼 모니터 없이도 부팅 시 LED 테스트 점멸로 배선 상태를 확인할 수 있습니다)
+### 3. 하드웨어 설정 (선택 사항)
+1. `esp32_server.ino`를 ESP32 보드에 업로드 (고정 IP: 192.168.0.21)
 
-### 4. 실행 순서
-1. **백엔드:** `backend` 폴더에서 `.\gradlew.bat bootRun` 실행
-2. **프론트엔드:** `frontend` 폴더에서 `npm run dev` 실행
-3. **하드웨어:** ESP32 전원 인가 (또는 뒷면 USB 연결)
-4. **AI 감지기:** 루트 폴더에서 `python turtle_neck_detector_backup.py` 실행
+### 4. 실행
+- **Backend:** `cd backend && ./gradlew bootRun`
+- **Frontend:** `cd frontend && npm run dev`
 
 ---
+
+## 📸 대시보드 미리보기
+
+- **실시간 분석:** 카메라 화면 상단에 한글 HUD(자세 점수, EAR, 깜빡임) 실시간 시각화
+- **사이드 위젯:** 포커스 타이머, 눈 피로도 모니터, 실시간 자세 분석 차트 배치
+- **기록 확인:** 캘린더의 각 날짜를 클릭하여 과거의 정밀한 자세 건강 점수 확인

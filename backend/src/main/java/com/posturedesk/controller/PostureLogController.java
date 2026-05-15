@@ -22,6 +22,7 @@ public class PostureLogController {
         PostureLog log = new PostureLog();
         log.setGoodPostureTime(request.getGoodPostureTime());
         log.setWarningCount(request.getWarningCount());
+        log.setPostureScore(request.getPostureScore());
         log.setUsername(request.getUsername() == null ? "anonymous" : request.getUsername());
         postureLogRepository.save(log);
         return ResponseEntity.ok("Log saved successfully");
