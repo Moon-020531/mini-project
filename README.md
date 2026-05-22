@@ -105,6 +105,4 @@ flowchart LR
 - **기록 확인:** 캘린더의 각 날짜를 클릭하여 과거의 정밀한 자세 건강 점수(10분 단위 누적 로깅)를 확인할 수 있습니다.
   
 
-https://github.com/user-attachments/assets/c8ef71e1-1b75-4e19-9754-7dddd1ac548c
-
 
