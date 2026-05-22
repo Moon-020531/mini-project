@@ -1,18 +1,18 @@
 /*
  * ==========================================================================
- *   ESP32 Micro-ROS 거북목 알림 장치 (Wi-Fi Subscriber Node)
+ * ESP32 Micro-ROS 거북목 알림 장치 (Wi-Fi Subscriber Node)
  * ==========================================================================
  *
- *   [기능]
- *   ROS 2 토픽 'posture_status'를 구독(Subscribe)하여,
- *   파이썬 노드(turtle_neck_detector_v2)가 보내는 자세 판별 결과에 따라
- *   LED와 부저를 제어합니다.
+ * [기능]
+ * ROS 2 토픽 'posture_status'를 구독(Subscribe)하여,
+ * 파이썬 노드(turtle_neck_detector_v2)가 보내는 자세 판별 결과에 따라
+ * LED와 부저를 제어합니다.
  *
- *   [통신 방식]
- *   Wi-Fi를 통한 Micro-ROS Agent(UDP) 통신
+ * [통신 방식]
+ * Wi-Fi를 통한 Micro-ROS Agent(UDP) 통신
  *
- *   [Micro-ROS Agent 실행 (PC 터미널)]
- *   $ docker run -it --rm --net=host microros/micro-ros-agent:jazzy udp4 --port 8888
+ * [Micro-ROS Agent 실행 (PC 터미널)]
+ * $ docker run -it --rm -p 8888:8888/udp microros/micro-ros-agent:jazzy udp4 --port 8888
  *
  * ==========================================================================
  */
@@ -26,14 +26,13 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <std_msgs/msg/int32.h>
-#include <WiFi.h>
 
 // ======================== Wi-Fi 및 Agent 설정 ========================
 const char* ssid = "5층";
 const char* password = "48864886";
 
 // PC(WSL2가 실행되는 윈도우 호스트)의 IP 주소
-const char* agent_ip_str = "192.168.0.14";
+const char* agent_ip_str = "192.168.0.45";
 const uint16_t agent_port = 8888;
 
 // ======================== 하드웨어 핀 설정 ========================
@@ -64,17 +63,11 @@ enum AgentState {
 };
 AgentState state = WAITING_AGENT;
 
-#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if (temp_rc != RCL_RET_OK) { error_loop(); } }
+// 🌟 수정된 에러 처리 매크로: 실패 시 무한루프 대신 false 반환 🌟
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if (temp_rc != RCL_RET_OK) { Serial.println("[에러] Micro-ROS 통신 지연. 재시도합니다..."); return false; } }
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; (void)temp_rc; }
 
 // ======================== 함수 정의 ========================
-
-void error_loop() {
-  while (1) {
-    digitalWrite(RED_LED_PIN, !digitalRead(RED_LED_PIN));
-    delay(100);
-  }
-}
 
 void set_normal_posture() {
   digitalWrite(GREEN_LED_PIN, HIGH);
@@ -115,7 +108,7 @@ void subscription_callback(const void * msgin) {
 }
 
 bool check_agent() {
-  return (RMW_RET_OK == rmw_uros_ping_agent(100, 1));
+  return (RMW_RET_OK == rmw_uros_ping_agent(300, 1));
 }
 
 bool create_entities() {
@@ -212,7 +205,8 @@ void loop() {
         
         static unsigned long last_debug_time = 0;
         if (millis() - last_debug_time > 2000) {
-          Serial.println("[Micro-ROS] PC의 Agent(192.168.0.3:8888) 응답을 기다리는 중...");
+          // IP 주소를 192.168.0.45 로 변경 적용
+          Serial.println("[Micro-ROS] PC의 Agent(192.168.0.45:8888) 응답을 기다리는 중...");
           last_debug_time = millis();
         }
 
@@ -238,6 +232,8 @@ void loop() {
         set_normal_posture();
         state = AGENT_CONNECTED;
       } else {
+        // 🌟 찌꺼기 리소스 정리 후 재연결 유도
+        destroy_entities();
         state = WAITING_AGENT;
       }
       break;
